@@ -1,0 +1,21 @@
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+}
+
+.wrapper {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: #f0f0f0;
+    width: 100vw;
+    height: 100vh;
+}
+
+canvas {
+    max-width: 100%;
+    max-height: 100%;
+}
