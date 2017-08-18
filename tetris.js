@@ -9,9 +9,30 @@ const PIECE_SCHEMAS = {
     "L": [  [1, 0],
             [1, 0],
             [1, 1]],
+
+    "J": [  [0, 1],
+            [0, 1],
+            [1, 1]],
+
     "T": [  [0, 1, 0],
             [1, 1, 1]],
+
+    "I": [  [1],
+            [1],
+            [1],
+            [1]],
+
+    "O": [  [1, 1],
+            [1, 1]],
+
+    "S": [  [0, 1, 1],
+            [1, 1, 0]],
+
+    "Z": [  [1, 1, 0],
+            [0, 1, 1]],
 }
+
+const PIECE_NAMES = ["L", "J", "T", "I", "O", "S", "Z"];
 
 class Block {
     constructor(color, position) {
@@ -64,13 +85,16 @@ class Board {
         this.state = [];
         this.boardSize = boardSize;
         this.activePiece = null;
-        this.defaultAnchor = [1, Math.floor(boardSize[1] / 2)];
+        this.defaultAnchor = [0, Math.floor(boardSize[1] / 2) - 1];
         this.blocks = [];
+        this.occupiedPositions = {};
         this.resetBoard();
+        this.piecePlacedEvent = new Event("pieceplaced");
     }
 
     resetBoard() {
         this.resetState();
+        this.occupiedPositions = {};
         this.blocks = [];
         this.activePiece = null;
         this.activeAnchor = JSON.parse(JSON.stringify(this.defaultAnchor));
@@ -125,33 +149,58 @@ class Board {
 
     movePiece(direction) {
         if(this.activePiece != null) {
-            let newPosition = this.activeAnchor[1] + direction;
+            let oldPosition = this.activeAnchor[1],
+                newPosition = this.activeAnchor[1] + direction;
             if(!(newPosition < 0 ||  newPosition + this.activePiece.shape.schema[0].length > this.boardSize[1])) {
                 this.activeAnchor[1] = newPosition;
+            }
+
+            if(this.checkForCollisions()) {
+                this.activeAnchor[1] = oldPosition;
             }
         }
     }
 
     executeGravityStep() {
         if(this.activePiece != null) {
-            let shouldBreakPiece = this.activeAnchor[0] + this.activePiece.shape.schema.length >= this.boardSize[0]
-                || false;
+            let shouldBreakPiece = this.activeAnchor[0] + this.activePiece.shape.schema.length >= this.boardSize[0];
+
+            
+            this.activeAnchor[0]++;
+
+            shouldBreakPiece = shouldBreakPiece || this.checkForCollisions();
             
             if(shouldBreakPiece) {
+                this.activeAnchor[0]--;
                 this.breakActivePiece();
-            } else {
-                this.activeAnchor[0]++;
-            }       
+            }      
         } 
+    }
+
+    checkForCollisions() {
+        let pieceShape = this.activePiece.shape.schema;
+
+        for(let i = 0; i < pieceShape.length; i++) {
+            for(let j = 0; j < pieceShape[i].length; j++) {
+                if(pieceShape[i][j]) {
+                    let collision = this.occupiedPositions[(this.activeAnchor[0] + i) + "," + (this.activeAnchor[1] + j)];                    
+                    if(typeof(collision) != "undefined" && collision) return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     breakActivePiece() {
         let pieceShape = this.activePiece.shape.schema,
-            pieceColor = this.activePiece.color;
+            pieceColor = this.activePiece.color,
+            pieceName = this.activePiece.shape.name;
 
         for(let i = 0; i < pieceShape.length; i++) {
             for(let j = 0; j < pieceShape[i].length; j++) {
-                if(pieceShape[i][j]) {  
+                if(pieceShape[i][j]) {
+                    this.occupiedPositions[(this.activeAnchor[0] + i) + "," + (this.activeAnchor[1] + j)] = true;
                     this.blocks.push(
                         new Block(pieceColor, [this.activeAnchor[0] + i, this.activeAnchor[1] + j]));
                 }
@@ -160,8 +209,46 @@ class Board {
 
         this.activePiece = null;
 
-        this.addPiece(new Piece("T", "" + (Math.floor(Math.random() * 9) + 1))) // TODO: Remove
+        this.checkForCompleteRows();
+
+        this.piecePlacedEvent.data = {"piece": pieceName, "shape": pieceShape, "position": this.activeAnchor};
+        document.dispatchEvent(this.piecePlacedEvent); 
     }    
+
+    checkForCompleteRows() {
+        let rowCount = {},
+            rowsToBreak = [];
+        this.blocks.forEach((block) => {
+            let row = block.position[0];
+            if(typeof(rowCount[row]) == "undefined") rowCount[row] = 0;
+            if(++rowCount[row] == this.boardSize[1]) {
+                rowsToBreak.push(row);
+            }        
+        });
+
+        if(rowsToBreak.length > 0) {
+            this.blocks = this.blocks.filter((block) => {
+                return !rowsToBreak.includes(block.position[0]);    
+            });
+
+            this.blocks.forEach((block) => {
+                let falls = 0;
+                rowsToBreak.forEach((row) => {
+                    if(block.position[0] < row) falls++;
+                });
+                block.position[0] += falls;
+            });
+
+            this.regenerateCollisionTable();
+        }        
+    }
+    
+    regenerateCollisionTable() {
+        this.occupiedPositions = {};
+        this.blocks.forEach((block) => {
+            this.occupiedPositions[block.position[0] + "," + block.position[1]] = true;
+        });
+    }
 
     rotatePiece(direction) {
         if(this.activePiece != null) {
@@ -173,8 +260,13 @@ class Board {
                 this.activeAnchor[0]--;
                 shouldBreakPiece = true;
             }
-            // Todo: prevent collision with other blocks when rotating
+
             this.activePiece.rotate(direction);
+
+            if(this.checkForCollisions()) {
+                this.activePiece.rotate(direction * -1);
+                return false;
+            }
 
             if(shouldBreakPiece) this.breakActivePiece();
         }
@@ -185,8 +277,11 @@ class Player {
     constructor(board) {
         this.activeBoard = board;
         document.addEventListener('keydown', (e) => {
-            if(typeof(this.activeBoard) !== "undefined" && this.activeBoard != null)
+            if(typeof(this.activeBoard) !== "undefined" && this.activeBoard != null) {
                 this.handleEvent(e);
+            } else {
+                console.warn("No active board set for player instance.", player);
+            }
         });       
     }
 
@@ -226,6 +321,12 @@ class Drawer {
         for(let i = 0, l = board.boardSize[0] * board.boardSize[1]; i < l; i++) {
             let x = leftBound + (i % board.boardSize[1]) * blockSize,
                 y = Math.floor(i / board.boardSize[1]) * blockSize;
+
+            if(board.state[i] != "-") {
+                this.ctx.fillStyle = "rgb(20,20,20)";
+                this.ctx.fillRect(x, y, blockSize, blockSize);
+            }
+
             switch (board.state[i]) {
                 case "-": this.ctx.fillStyle = board.backgroundColor; break;
                 case "1": this.ctx.fillStyle = "rgb(200, 0, 0)"; break;
@@ -239,18 +340,39 @@ class Drawer {
                 case "9": this.ctx.fillStyle = "rgb(0, 200, 200)"; break;
                 default: this.ctx.fillStyle = "rgb(255, 45, 220)";
             }
+            
+            if(board.state[i] != "-") {
+                this.ctx.fillRect(x+1, y+1, blockSize-2, blockSize-2);
+            } else {
+                this.ctx.fillRect(x, y, blockSize, blockSize);
+            }
 
-            this.ctx.fillRect(x, y, blockSize, blockSize);
         }
     }
 }
 
-var b; // TODO: REMOVE
+class Game {
+    constructor(board) {
+        this.board = board;
+
+        document.addEventListener("pieceplaced", (e) => {
+            this.addRandomPiece();
+        }, false);
+    }
+
+    addRandomPiece() {
+        let pieceName = PIECE_NAMES[Math.floor(Math.random() * PIECE_NAMES.length)],
+            color = "" + (Math.floor(Math.random() * 9) + 1);
+        
+        this.board.addPiece(new Piece(pieceName, color));
+    }
+}
 
 function startGame() {
     let board = new Board("rgb(90,90,90)", [20, 10]),
         drawer = new Drawer("rgb(30,30,30)", [800, 600], 'mainCanvas'),
-        player = new Player(board);
+        player = new Player(board),
+        game = new Game(board);
     drawer.prepareCanvas();
     drawer.drawBoard(board);
     setTimeout(() => {
@@ -262,7 +384,6 @@ function startGame() {
             board.executeGravityStep();
         }, 1000);
     }, 15);
-    b = board; // TODO: REMOVE
 }
 
 function benchmark() {
